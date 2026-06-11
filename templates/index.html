@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Downloader Pro – Download Videos From Anywhere</title>
+
+    <!-- Meta Descriptions for SEO -->
+    <meta name="description"
+        content="Download high-quality videos and audio (MP4/MP3) from YouTube, Instagram, Facebook, TikTok, Twitter/X, Vimeo, and Dailymotion instantly. Premium, fast, and free.">
+    <meta name="keywords"
+        content="video downloader, youtube downloader, tiktok downloader, instagram downloader, facebook video downloader, mp3 converter, yt-dlp">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon"
+        href="https://nocache-appxdb-v2.classx.co.in/subject/2026-01-29-0.2704231580860854.png">
+
+    <!-- Google Fonts: Outfit (headings) and Inter (body) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+    <!-- FontAwesome Icons for clean, recognizable platform badges -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Custom CSS Styles -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+    <!-- Canvas for the animated premium background particles -->
+    <canvas id="particle-canvas"></canvas>
+
+    <!-- Ambient glowing backgrounds behind the glass cards -->
+    <div class="bg-glow bg-glow-left"></div>
+    <div class="bg-glow bg-glow-right"></div>
+
+    <main class="app-container">
+        <!-- Header Section -->
+        <header class="app-header">
+            <div class="logo-area">
+                <img src="https://nocache-appxdb-v2.classx.co.in/subject/2026-01-29-0.2704231580860854.png"
+                    alt="Universal Downloader Pro Logo" class="app-logo" id="logo-img">
+                <h1 class="gradient-text">Disha Media Downloader</h1>
+            </div>
+            <p class="tagline">Download Videos From Anywhere.</p>
+        </header>
+
+        <!-- Main Downloader Interface Card -->
+        <section class="glass-card main-downloader-card" id="downloader-card">
+            <!-- URL Input Form Section -->
+            <div class="input-section">
+                <div class="input-glow-wrapper">
+                    <i class="fa-regular fa-paper-plane input-icon"></i>
+                    <input type="text" id="url-input" placeholder="Paste link from YouTube, TikTok, Instagram, X..."
+                        autocomplete="off">
+                    <button id="paste-btn" class="icon-action-btn" title="Paste from clipboard">
+                        <i class="fa-regular fa-clipboard"></i>
+                    </button>
+                </div>
+                <button id="fetch-btn" class="glowing-btn">
+                    <span>Fetch Media</span>
+                    <i class="fa-solid fa-arrow-right-long btn-arrow"></i>
+                </button>
+            </div>
+
+            <!-- Metadata Preview and Configuration Section (hidden initially) -->
+            <div class="result-section hidden" id="result-section">
+                <hr class="card-divider">
+
+                <div class="media-details-grid">
+                    <!-- Media Thumbnail Column -->
+                    <div class="thumbnail-wrapper">
+                        <img id="media-thumb" src="" alt="Video Thumbnail" class="media-thumbnail">
+                        <span id="media-duration" class="duration-badge">00:00</span>
+                    </div>
+
+                    <!-- Media Info & Configurations Column -->
+                    <div class="config-wrapper">
+                        <div class="platform-meta">
+                            <span id="platform-badge" class="platform-badge generic">
+                                <i class="fa-solid fa-globe"></i>
+                                <span id="platform-text">Website</span>
+                            </span>
+                        </div>
+                        <h2 id="media-title" class="media-title">Video Title</h2>
+
+                        <!-- MP4/MP3 Selection Switch -->
+                        <div class="format-toggle-container">
+                            <label class="toggle-label">Output Type:</label>
+                            <div class="format-toggle-group">
+                                <button id="type-mp4" class="toggle-btn active" data-type="mp4">
+                                    <i class="fa-solid fa-video"></i> MP4 Video
+                                </button>
+                                <button id="type-mp3" class="toggle-btn" data-type="mp3">
+                                    <i class="fa-solid fa-music"></i> MP3 Audio
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Quality & Estimated Size Section -->
+                        <div class="quality-selector-container" id="quality-selector-container">
+                            <label for="quality-select" class="toggle-label">Resolution / Quality:</label>
+                            <div class="select-glow-wrapper">
+                                <select id="quality-select">
+                                    <!-- Dynamic options injected by JS -->
+                                </select>
+                                <i class="fa-solid fa-chevron-down select-arrow"></i>
+                            </div>
+                            <p class="size-estimate">
+                                <i class="fa-solid fa-hard-drive"></i> Est. File Size: <strong
+                                    id="est-size">Calculating...</strong>
+                            </p>
+                        </div>
+
+                        <!-- Dynamic Actions -->
+                        <div class="action-btn-row">
+                            <button id="download-btn" class="glowing-btn action-download-btn">
+                                <i class="fa-solid fa-download download-icon-spin"></i>
+                                <span>Download Now</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress Tracker Display (hidden initially) -->
+            <div class="progress-section hidden" id="progress-section">
+                <hr class="card-divider">
+                <div class="progress-info-row">
+                    <span id="progress-status" class="progress-status-label">Downloading...</span>
+                    <span id="progress-percent" class="progress-percent-label">0%</span>
+                </div>
+
+                <!-- Custom Striped Progress Bar -->
+                <div class="progress-bar-bg">
+                    <div id="progress-bar-fill" class="progress-bar-fill"></div>
+                </div>
+
+                <div class="progress-stats-row">
+                    <span class="stat-item">
+                        <i class="fa-solid fa-gauge-high"></i>
+                        Speed: <strong id="progress-speed">0 KB/s</strong>
+                    </span>
+                    <span class="stat-item">
+                        <i class="fa-solid fa-clock"></i>
+                        ETA: <strong id="progress-eta">Unknown</strong>
+                    </span>
+                </div>
+            </div>
+        </section>
+
+        <!-- Download History Glass Card -->
+        <section class="glass-card history-card">
+            <div class="history-header">
+                <h2>
+                    <i class="fa-solid fa-clock-rotate-left header-icon"></i>
+                    <span>Download History</span>
+                </h2>
+                <button id="clear-history-btn" class="text-action-btn" title="Clear all history">
+                    <i class="fa-regular fa-trash-can"></i> Clear All
+                </button>
+            </div>
+
+            <div class="history-list" id="history-list">
+                <!-- Dynamic history list injected by JS -->
+                <div class="empty-history">
+                    <i class="fa-solid fa-cloud-arrow-down empty-icon"></i>
+                    <p>Your download history is empty. Start fetching URLs!</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Toast Notifications Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Custom JS Scripts -->
+    <script src="/static/script.js"></script>
+</body>
+
+</html>
