@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressBarFill = document.getElementById('progress-bar-fill');
     const progressSpeed = document.getElementById('progress-speed');
     const progressEta = document.getElementById('progress-eta');
+    const cookiesFileInput = document.getElementById('cookies-file');
     
     const historyList = document.getElementById('history-list');
     const clearHistoryBtn = document.getElementById('clear-history-btn');
@@ -141,11 +142,24 @@ document.addEventListener('DOMContentLoaded', () => {
         if (pollInterval) clearInterval(pollInterval);
         
         try {
-            const response = await fetch('/formats', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: url })
-            });
+            let response;
+            const cookiesFile = cookiesFileInput.files[0];
+
+            if (cookiesFile) {
+                const formData = new FormData();
+                formData.append('url', url);
+                formData.append('cookies_file', cookiesFile);
+                response = await fetch('/formats', {
+                    method: 'POST',
+                    body: formData
+                });
+            } else {
+                response = await fetch('/formats', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url })
+                });
+            }
 
             const data = await response.json();
 
@@ -285,15 +299,30 @@ document.addEventListener('DOMContentLoaded', () => {
         progressSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
         try {
-            const response = await fetch('/download', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    url: url,
-                    quality: quality,
-                    type: activeType
-                })
-            });
+            let response;
+            const cookiesFile = cookiesFileInput.files[0];
+
+            if (cookiesFile) {
+                const formData = new FormData();
+                formData.append('url', url);
+                formData.append('quality', quality);
+                formData.append('type', activeType);
+                formData.append('cookies_file', cookiesFile);
+                response = await fetch('/download', {
+                    method: 'POST',
+                    body: formData
+                });
+            } else {
+                response = await fetch('/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: url,
+                        quality: quality,
+                        type: activeType
+                    })
+                });
+            }
 
             const data = await response.json();
             if (!response.ok) {

@@ -218,6 +218,40 @@ body {
     transition: var(--transition-smooth);
 }
 
+.cookie-upload-row {
+    width: 100%;
+    margin-top: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cookie-upload-label {
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+}
+
+.file-input {
+    width: 100%;
+    padding: 13px 14px;
+    border-radius: var(--border-radius-md);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    color: var(--text-primary);
+    transition: var(--transition-smooth);
+}
+
+.file-input:hover,
+.file-input:focus {
+    border-color: rgba(255, 26, 64, 0.35);
+    outline: none;
+}
+
+.cookie-note {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+
 .input-glow-wrapper:focus-within {
     border-color: rgba(255, 26, 64, 0.5);
     box-shadow: 0 0 15px rgba(255, 26, 64, 0.15);
