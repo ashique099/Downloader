@@ -315,9 +315,13 @@ def index():
 def get_formats():
     """Fetches video metadata and returns available qualities + size estimations."""
     data = request.get_json()
+    # support both application/json and multipart/form-data or form-encoded
+    if not data:
+        data = request.form.to_dict()
+
     if not data or 'url' not in data:
         return jsonify({'error': 'URL is required'}), 400
-    
+
     url = data['url'].strip()
     if not url:
         return jsonify({'error': 'URL cannot be empty'}), 400
@@ -329,8 +333,16 @@ def get_formats():
         'logger': YTDLLogger(),
     }
 
-    # Optional cookies support (pass Netscape cookie file contents via JSON 'cookies')
+    # Optional cookies support (pass Netscape cookie file contents via JSON 'cookies'
+    # or upload a cookies file with key 'cookies_file' in multipart/form-data)
     cookies_text = data.get('cookies') if isinstance(data, dict) else None
+    # If a file was uploaded, prefer that
+    if 'cookies_file' in request.files:
+        try:
+            f = request.files['cookies_file']
+            cookies_text = f.read().decode('utf-8')
+        except Exception:
+            pass
     temp_cookiefile = None
     if cookies_text:
         try:
@@ -430,6 +442,10 @@ def get_formats():
 def start_download():
     """Initializes background download thread and registers tasks details."""
     data = request.get_json()
+    # support both application/json and multipart/form-data or form-encoded
+    if not data:
+        data = request.form.to_dict()
+
     if not data or 'url' not in data:
         return jsonify({'error': 'URL is required'}), 400
         
@@ -437,6 +453,13 @@ def start_download():
     quality = data.get('quality', 'best')
     download_type = data.get('type', 'mp4') # 'mp4' or 'mp3'
     cookies_text = data.get('cookies') if isinstance(data, dict) else None
+    # Accept uploaded cookies file in multipart/form-data under 'cookies_file'
+    if 'cookies_file' in request.files:
+        try:
+            f = request.files['cookies_file']
+            cookies_text = f.read().decode('utf-8')
+        except Exception:
+            cookies_text = cookies_text
     
     # Generate unique Task ID
     task_id = str(uuid.uuid4())
@@ -450,7 +473,8 @@ def start_download():
             'filename': '',
             'filepath': '',
             'error': '',
-            'cookies': cookies_text
+            'cookies': cookies_text,
+            'cookies_used': bool(cookies_text)
         }
         
     # Spawn background thread for downloading
