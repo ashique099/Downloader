@@ -3,6 +3,7 @@ import time
 import uuid
 import shutil
 import threading
+import tempfile
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 import yt_dlp
@@ -174,6 +175,9 @@ def download_thread(task_id, url, quality, download_type):
     task_dir = os.path.join(DOWNLOADS_DIR, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
+    # Allow per-task cookies (Netscape cookies.txt format) to be written to task dir
+    cookie_path = None
+
     # Determine yt-dlp options based on download request
     if download_type == 'mp3':
         ydl_opts = {
@@ -210,6 +214,17 @@ def download_thread(task_id, url, quality, download_type):
         }
 
     try:
+        # If cookies were provided for this task, write them to a cookiefile and pass to yt-dlp
+        if download_tasks.get(task_id) and download_tasks[task_id].get('cookies'):
+            try:
+                cookie_path = os.path.join(task_dir, 'cookies.txt')
+                with open(cookie_path, 'w', encoding='utf-8') as cf:
+                    cf.write(download_tasks[task_id]['cookies'])
+
+                # attach cookiefile to ydl options
+                ydl_opts['cookiefile'] = cookie_path
+            except Exception:
+                cookie_path = None
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # Mark starting state
             with task_lock:
@@ -259,6 +274,13 @@ def download_thread(task_id, url, quality, download_type):
         with task_lock:
             download_tasks[task_id]['status'] = 'failed'
             download_tasks[task_id]['error'] = tb_str
+    finally:
+        # remove cookie file from task dir if created
+        try:
+            if cookie_path and os.path.exists(cookie_path):
+                os.remove(cookie_path)
+        except Exception:
+            pass
 
 def cleanup_old_files():
     """Background task to delete old download directories after 15 minutes of inactivity."""
@@ -306,6 +328,19 @@ def get_formats():
         'skip_download': True,
         'logger': YTDLLogger(),
     }
+
+    # Optional cookies support (pass Netscape cookie file contents via JSON 'cookies')
+    cookies_text = data.get('cookies') if isinstance(data, dict) else None
+    temp_cookiefile = None
+    if cookies_text:
+        try:
+            tf = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
+            tf.write(cookies_text)
+            tf.close()
+            temp_cookiefile = tf.name
+            ydl_opts['cookiefile'] = temp_cookiefile
+        except Exception:
+            temp_cookiefile = None
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -383,6 +418,13 @@ def get_formats():
         elif 'unable to download webpage' in err_msg.lower() or 'connection' in err_msg.lower():
             err_msg = "Unable to access the webpage. Check your internet connection or the URL's validity."
         return jsonify({'error': err_msg}), 500
+    finally:
+        # cleanup temp cookiefile
+        try:
+            if temp_cookiefile and os.path.exists(temp_cookiefile):
+                os.remove(temp_cookiefile)
+        except Exception:
+            pass
 
 @app.route('/download', methods=['POST'])
 def start_download():
@@ -394,6 +436,7 @@ def start_download():
     url = data['url'].strip()
     quality = data.get('quality', 'best')
     download_type = data.get('type', 'mp4') # 'mp4' or 'mp3'
+    cookies_text = data.get('cookies') if isinstance(data, dict) else None
     
     # Generate unique Task ID
     task_id = str(uuid.uuid4())
@@ -406,7 +449,8 @@ def start_download():
             'eta': 'Unknown',
             'filename': '',
             'filepath': '',
-            'error': ''
+            'error': '',
+            'cookies': cookies_text
         }
         
     # Spawn background thread for downloading
