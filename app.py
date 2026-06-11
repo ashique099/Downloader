@@ -18,6 +18,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOWNLOADS_DIR = os.path.join(BASE_DIR, 'downloads')
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
+# Path to a server-side YouTube cookies file (Netscape format).
+# Export from Chrome/Firefox with a cookies extension and place next to app.py.
+# If this file exists it is automatically used for all YouTube requests.
+SERVER_COOKIES_FILE = os.path.join(BASE_DIR, 'cookies.txt')
+
 # Global task storage and thread safety lock
 download_tasks = {}
 task_lock = threading.Lock()
@@ -179,29 +184,20 @@ def download_thread(task_id, url, quality, download_type):
     cookie_path = None
 
     # Determine yt-dlp options based on download request
-    # YouTube anti-bot bypass: use TV embedded + iOS clients which work on server IPs
-    # without requiring cookies or PO tokens
     base_opts = {
         'quiet': True,
         'no_warnings': True,
         'noprogress': True,
         'logger': YTDLLogger(),
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv_embedded', 'ios', 'android'],
-                'skip': ['translated_subs'],
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'com.google.ios.youtube/19.29.1 CFNetwork/1408.0.4 Darwin/22.5.0',
-            'Accept-Language': 'en-US,en;q=0.9',
-        },
+        # Force IPv4 — server IPv6 addresses are frequently flagged by YouTube
+        'source_address': '0.0.0.0',
         'retries': 5,
         'fragment_retries': 5,
-        'sleep_interval': 1,
-        'max_sleep_interval': 5,
-        'sleep_interval_requests': 1,
     }
+
+    # Auto-load server-side cookies.txt if it exists (highest-priority bypass)
+    if os.path.exists(SERVER_COOKIES_FILE):
+        base_opts['cookiefile'] = SERVER_COOKIES_FILE
     
     if download_type == 'mp3':
         ydl_opts = {
@@ -344,29 +340,19 @@ def get_formats():
     if not url:
         return jsonify({'error': 'URL cannot be empty'}), 400
         
-    # YouTube anti-bot bypass: use TV embedded + iOS clients which work on server IPs
-    # without requiring cookies or PO tokens
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
         'logger': YTDLLogger(),
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['tv_embedded', 'ios', 'android'],
-                'skip': ['translated_subs'],
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'com.google.ios.youtube/19.29.1 CFNetwork/1408.0.4 Darwin/22.5.0',
-            'Accept-Language': 'en-US,en;q=0.9',
-        },
-        'retries': 5,
-        'fragment_retries': 5,
-        'sleep_interval': 1,
-        'max_sleep_interval': 5,
-        'sleep_interval_requests': 1,
+        # Force IPv4 — server IPv6 addresses are frequently flagged by YouTube
+        'source_address': '0.0.0.0',
+        'retries': 3,
     }
+
+    # Auto-load server-side cookies.txt if present (highest-priority bypass)
+    if os.path.exists(SERVER_COOKIES_FILE):
+        ydl_opts['cookiefile'] = SERVER_COOKIES_FILE
 
     # Optional cookies support (pass Netscape cookie file contents via JSON 'cookies'
     # or upload a cookies file with key 'cookies_file' in multipart/form-data)
@@ -460,7 +446,12 @@ def get_formats():
     except Exception as e:
         # Provide human friendly error message
         err_msg = str(e)
-        if 'unsupported url' in err_msg.lower():
+        if 'sign in' in err_msg.lower() or 'bot' in err_msg.lower() or 'confirm' in err_msg.lower():
+            err_msg = ("YouTube is blocking this server's IP. "
+                       "To fix: export your YouTube cookies from Chrome/Firefox using the "
+                       "'Get cookies.txt LOCALLY' extension, then save the file as 'cookies.txt' "
+                       "next to app.py on the server and restart.")
+        elif 'unsupported url' in err_msg.lower():
             err_msg = "Unsupported website or invalid URL. Please check the link and try again."
         elif 'unable to download webpage' in err_msg.lower() or 'connection' in err_msg.lower():
             err_msg = "Unable to access the webpage. Check your internet connection or the URL's validity."
