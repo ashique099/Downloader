@@ -1,9 +1,15 @@
 import os
+import re
+import ssl
+import json
 import time
 import uuid
 import shutil
 import threading
 import tempfile
+import subprocess
+import urllib.request
+import urllib.error
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 import yt_dlp
@@ -22,6 +28,283 @@ os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 # Export from Chrome/Firefox with a cookies extension and place next to app.py.
 # If this file exists it is automatically used for all YouTube requests.
 SERVER_COOKIES_FILE = os.path.join(BASE_DIR, 'cookies.txt')
+
+# ── YouTube Invidious fallback ─────────────────────────────────────────────
+# When YouTube blocks the server IP, the app automatically retries by querying
+# these public Invidious instances to obtain signed stream URLs.
+_INVIDIOUS_INSTANCES = [
+    'https://invidious.jing.rocks',
+    'https://inv.tux.pizza',
+    'https://yewtu.be',
+    'https://invidious.privacydev.net',
+    'https://inv.riverside.rocks',
+    'https://iv.datura.network',
+]
+_SSL_CTX = ssl.create_default_context()
+_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+
+
+def _extract_youtube_id(url):
+    """Extract YouTube video ID from various URL formats."""
+    for pat in [
+        r'[?&]v=([A-Za-z0-9_-]{11})',
+        r'youtu\.be/([A-Za-z0-9_-]{11})',
+        r'/shorts/([A-Za-z0-9_-]{11})',
+        r'/embed/([A-Za-z0-9_-]{11})',
+        r'/v/([A-Za-z0-9_-]{11})',
+    ]:
+        m = re.search(pat, url)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _invidious_fetch(video_id):
+    """Query Invidious instances until one returns valid video data.
+    Returns (data_dict, instance_base_url) or (None, None)."""
+    fields = 'title,lengthSeconds,videoThumbnails,adaptiveFormats,formatStreams'
+    for base in _INVIDIOUS_INSTANCES:
+        try:
+            req = urllib.request.Request(
+                f'{base}/api/v1/videos/{video_id}?fields={fields}',
+                headers={'User-Agent': _UA},
+            )
+            with urllib.request.urlopen(req, timeout=12, context=_SSL_CTX) as r:
+                if r.status == 200:
+                    data = json.loads(r.read().decode('utf-8'))
+                    if data.get('adaptiveFormats') or data.get('formatStreams'):
+                        return data, base
+        except Exception:
+            continue
+    return None, None
+
+
+def _stream_download(url, dest_path, task_id, pct_start=0, pct_end=100):
+    """Stream-download url to dest_path, mapping byte progress to pct_start..pct_end."""
+    req = urllib.request.Request(url, headers={
+        'User-Agent': _UA,
+        'Referer': 'https://www.youtube.com/',
+    })
+    pct_range = pct_end - pct_start
+    with urllib.request.urlopen(req, timeout=60, context=_SSL_CTX) as resp:
+        total = int(resp.headers.get('Content-Length', 0))
+        downloaded = 0
+        with open(dest_path, 'wb') as f:
+            while True:
+                buf = resp.read(65536)
+                if not buf:
+                    break
+                f.write(buf)
+                downloaded += len(buf)
+                pct = (pct_start + round((downloaded / total) * pct_range, 1)) if total > 0 else pct_start
+                with task_lock:
+                    if task_id in download_tasks:
+                        download_tasks[task_id]['progress'] = min(pct, pct_end)
+
+
+def _invidious_download(task_id, url, quality, download_type, task_dir):
+    """Fallback YouTube downloader via Invidious API. Returns True on success."""
+    video_id = _extract_youtube_id(url)
+    if not video_id:
+        return False
+
+    with task_lock:
+        if task_id in download_tasks:
+            download_tasks[task_id]['speed'] = 'Retrying via fallback server...'
+            download_tasks[task_id]['eta'] = 'Please wait'
+
+    data, instance = _invidious_fetch(video_id)
+    if not data:
+        return False
+
+    title = data.get('title', f'video_{video_id}')
+    safe_title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', title).strip()[:100] or f'video_{video_id}'
+
+    adaptive = data.get('adaptiveFormats', [])
+    legacy   = data.get('formatStreams', [])
+
+    def abs_url(u):
+        return (instance + u) if u.startswith('/') else u
+
+    # ── MP3 path ───────────────────────────────────────────────────────────
+    if download_type == 'mp3':
+        audio_fmts = sorted(
+            [f for f in adaptive if 'audio' in f.get('type', '')],
+            key=lambda x: x.get('bitrate', 0), reverse=True
+        )
+        if not audio_fmts:
+            return False
+        best_a = audio_fmts[0]
+        a_ext  = 'webm' if 'webm' in best_a.get('type', '') else 'm4a'
+        a_path  = os.path.join(task_dir, f'{safe_title}.{a_ext}')
+        mp3_path = os.path.join(task_dir, f'{safe_title}.mp3')
+
+        with task_lock:
+            if task_id in download_tasks:
+                download_tasks[task_id]['speed'] = 'Downloading audio...'
+        _stream_download(abs_url(best_a.get('url', '')), a_path, task_id, 0, 85)
+
+        with task_lock:
+            if task_id in download_tasks:
+                download_tasks[task_id]['status'] = 'processing'
+                download_tasks[task_id]['progress'] = 90.0
+                download_tasks[task_id]['speed'] = 'Converting to MP3...'
+
+        res = subprocess.run(
+            ['ffmpeg', '-y', '-i', a_path, '-codec:a', 'libmp3lame', '-q:a', '2', mp3_path],
+            capture_output=True
+        )
+        try:
+            os.remove(a_path)
+        except Exception:
+            pass
+        if res.returncode != 0 or not os.path.exists(mp3_path):
+            return False
+        final_path = mp3_path
+        final_name = f'{safe_title}.mp3'
+
+    # ── MP4 path ───────────────────────────────────────────────────────────
+    else:
+        target_h = 99999 if quality == 'best' else int(quality.replace('p', '') or 99999)
+
+        video_fmts = sorted(
+            [f for f in adaptive if 'video' in f.get('type', '') and f.get('height')],
+            key=lambda x: (x.get('height', 0), x.get('bitrate', 0)), reverse=True
+        )
+        audio_fmts = sorted(
+            [f for f in adaptive if 'audio' in f.get('type', '')],
+            key=lambda x: x.get('bitrate', 0), reverse=True
+        )
+
+        if video_fmts and audio_fmts:
+            # Adaptive streams: separate video + audio → merge with ffmpeg
+            eligible = [f for f in video_fmts if f.get('height', 0) <= target_h] or video_fmts
+            best_v = eligible[0]
+            best_a = audio_fmts[0]
+
+            v_ext  = 'webm' if 'webm' in best_v.get('type', '') else 'mp4'
+            a_ext  = 'webm' if 'webm' in best_a.get('type', '') else 'm4a'
+            v_path   = os.path.join(task_dir, f'{safe_title}_v.{v_ext}')
+            a_path   = os.path.join(task_dir, f'{safe_title}_a.{a_ext}')
+            out_path = os.path.join(task_dir, f'{safe_title}.mp4')
+
+            with task_lock:
+                if task_id in download_tasks:
+                    download_tasks[task_id]['speed'] = 'Downloading video stream...'
+            _stream_download(abs_url(best_v.get('url', '')), v_path, task_id, 0, 55)
+
+            with task_lock:
+                if task_id in download_tasks:
+                    download_tasks[task_id]['speed'] = 'Downloading audio stream...'
+            _stream_download(abs_url(best_a.get('url', '')), a_path, task_id, 55, 88)
+
+            with task_lock:
+                if task_id in download_tasks:
+                    download_tasks[task_id]['status'] = 'processing'
+                    download_tasks[task_id]['progress'] = 92.0
+                    download_tasks[task_id]['speed'] = 'Merging streams...'
+
+            res = subprocess.run(
+                ['ffmpeg', '-y', '-i', v_path, '-i', a_path,
+                 '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental', out_path],
+                capture_output=True
+            )
+            for p in (v_path, a_path):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+            if res.returncode != 0 or not os.path.exists(out_path):
+                return False
+            final_path = out_path
+            final_name = f'{safe_title}.mp4'
+
+        elif legacy:
+            # Legacy combined streams (no merge needed, typically up to 720p)
+            eligible = sorted(legacy, key=lambda x: x.get('bitrate', 0), reverse=True)
+            by_h = [f for f in eligible
+                    if int((f.get('resolution') or '0x0').split('x')[-1]) <= target_h]
+            best  = (by_h or eligible)[0]
+            out_path = os.path.join(task_dir, f'{safe_title}.mp4')
+            with task_lock:
+                if task_id in download_tasks:
+                    download_tasks[task_id]['speed'] = 'Downloading video...'
+            _stream_download(abs_url(best.get('url', '')), out_path, task_id, 0, 98)
+            if not os.path.exists(out_path):
+                return False
+            final_path = out_path
+            final_name = f'{safe_title}.mp4'
+        else:
+            return False
+
+    # Secure the final filename
+    safe_name = secure_filename(final_name)
+    if not os.path.splitext(safe_name)[0]:
+        safe_name = f'download_{task_id}{os.path.splitext(final_name)[1]}'
+    safe_filepath = os.path.join(task_dir, safe_name)
+    if final_path != safe_filepath:
+        try:
+            os.rename(final_path, safe_filepath)
+            final_path = safe_filepath
+        except Exception:
+            pass
+
+    with task_lock:
+        if task_id in download_tasks:
+            download_tasks[task_id]['status']   = 'completed'
+            download_tasks[task_id]['progress']  = 100.0
+            download_tasks[task_id]['filename']  = os.path.basename(final_path)
+            download_tasks[task_id]['filepath']  = final_path
+    return True
+
+
+def _invidious_formats(url):
+    """Get video info from Invidious as /formats-compatible dict, or None on failure."""
+    video_id = _extract_youtube_id(url)
+    if not video_id:
+        return None
+    data, _ = _invidious_fetch(video_id)
+    if not data:
+        return None
+
+    title        = data.get('title', 'Video')
+    duration_s   = data.get('lengthSeconds', 0)
+    thumbs       = data.get('videoThumbnails', [])
+    thumbnail    = next(
+        (t.get('url') for t in thumbs if t.get('quality') in ('maxres', 'high', 'sddefault')),
+        f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg'
+    )
+
+    seen_heights = set()
+    for f in data.get('adaptiveFormats', []):
+        if 'video' in f.get('type', '') and f.get('height'):
+            seen_heights.add(int(f['height']))
+    for f in data.get('formatStreams', []):
+        res = f.get('resolution', '')
+        if 'x' in res:
+            try:
+                seen_heights.add(int(res.split('x')[-1]))
+            except Exception:
+                pass
+
+    std = {1080: '1080p Full HD', 720: '720p HD', 480: '480p SD',
+           360: '360p Medium', 240: '240p Low', 144: '144p Lowest'}
+    max_h = max(seen_heights) if seen_heights else 720
+    qualities = [
+        {'id': f'{h}p', 'label': lbl, 'size': 'Estimated'}
+        for h, lbl in sorted(std.items(), reverse=True) if max_h >= h
+    ]
+    qualities.insert(0, {'id': 'best', 'label': 'Best Quality', 'size': 'Estimated'})
+
+    return {
+        'title': title,
+        'thumbnail': thumbnail,
+        'duration': format_duration(duration_s),
+        'platform': 'youtube',
+        'qualities': qualities,
+    }
+
+# ── End Invidious fallback ─────────────────────────────────────────────────
 
 # Global task storage and thread safety lock
 download_tasks = {}
@@ -284,10 +567,20 @@ def download_thread(task_id, url, quality, download_type):
                 
     except Exception as e:
         import traceback
+        err_str = str(e).lower()
+        is_yt   = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
+        is_bot  = 'sign in' in err_str or 'bot' in err_str or 'confirm' in err_str
+        # Auto-retry via Invidious when YouTube blocks the server IP
+        if is_yt and is_bot:
+            try:
+                if _invidious_download(task_id, url, quality, download_type, task_dir):
+                    return  # Successfully downloaded via fallback
+            except Exception:
+                pass
         tb_str = traceback.format_exc()
         with task_lock:
             download_tasks[task_id]['status'] = 'failed'
-            download_tasks[task_id]['error'] = tb_str
+            download_tasks[task_id]['error'] = str(e)
     finally:
         # remove cookie file from task dir if created
         try:
@@ -444,16 +737,19 @@ def get_formats():
             })
             
     except Exception as e:
-        # Provide human friendly error message
-        err_msg = str(e)
-        if 'sign in' in err_msg.lower() or 'bot' in err_msg.lower() or 'confirm' in err_msg.lower():
-            err_msg = ("YouTube is blocking this server's IP. "
-                       "To fix: export your YouTube cookies from Chrome/Firefox using the "
-                       "'Get cookies.txt LOCALLY' extension, then save the file as 'cookies.txt' "
-                       "next to app.py on the server and restart.")
-        elif 'unsupported url' in err_msg.lower():
+        err_msg  = str(e)
+        err_low  = err_msg.lower()
+        is_yt    = 'youtube.com' in url.lower() or 'youtu.be' in url.lower()
+        is_bot   = 'sign in' in err_low or 'bot' in err_low or 'confirm' in err_low
+        # Auto-retry via Invidious when YouTube blocks the server IP
+        if is_yt and is_bot:
+            inv_data = _invidious_formats(url)
+            if inv_data:
+                return jsonify(inv_data)
+            err_msg = "YouTube is blocking this server and the automatic fallback also failed. Please try again in a few minutes."
+        elif 'unsupported url' in err_low:
             err_msg = "Unsupported website or invalid URL. Please check the link and try again."
-        elif 'unable to download webpage' in err_msg.lower() or 'connection' in err_msg.lower():
+        elif 'unable to download webpage' in err_low or 'connection' in err_low:
             err_msg = "Unable to access the webpage. Check your internet connection or the URL's validity."
         return jsonify({'error': err_msg}), 500
     finally:
