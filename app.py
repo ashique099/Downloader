@@ -74,7 +74,8 @@ def _invidious_fetch(video_id):
                     data = json.loads(r.read().decode('utf-8'))
                     if data.get('adaptiveFormats') or data.get('formatStreams'):
                         return data, base
-        except Exception:
+        except Exception as e:
+            print(f"[Fallback] Invidious instance {base} failed: {str(e)}")
             continue
     return None, None
 
@@ -472,10 +473,16 @@ def download_thread(task_id, url, quality, download_type):
         'no_warnings': True,
         'noprogress': True,
         'logger': YTDLLogger(),
-        # Force IPv4 — server IPv6 addresses are frequently flagged by YouTube
-        'source_address': '0.0.0.0',
         'retries': 5,
         'fragment_retries': 5,
+        # Bypasses: Impersonate a real browser and use server-friendly clients
+        'impersonate': 'chrome',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv_embedded', 'ios', 'android', 'default'],
+                'skip': ['translated_subs']
+            }
+        }
     }
 
     # Auto-load server-side cookies.txt if it exists (highest-priority bypass)
@@ -645,9 +652,15 @@ def get_formats():
         'no_warnings': True,
         'skip_download': True,
         'logger': YTDLLogger(),
-        # Force IPv4 — server IPv6 addresses are frequently flagged by YouTube
-        'source_address': '0.0.0.0',
         'retries': 3,
+        # Bypasses: Impersonate a real browser and use server-friendly clients
+        'impersonate': 'chrome',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['tv_embedded', 'ios', 'android', 'default'],
+                'skip': ['translated_subs']
+            }
+        }
     }
 
     # Auto-load server-side cookies.txt if present (highest-priority bypass)
