@@ -179,8 +179,22 @@ def download_thread(task_id, url, quality, download_type):
     cookie_path = None
 
     # Determine yt-dlp options based on download request
+    # Base options with YouTube anti-bot bypass (Android client + headers)
+    base_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+        'logger': YTDLLogger(),
+        'user_agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
+    }
+    
     if download_type == 'mp3':
         ydl_opts = {
+            **base_opts,
             'format': 'bestaudio/best',
             'outtmpl': os.path.join(task_dir, '%(title)s.%(ext)s'),
             'progress_hooks': [progress_hook(task_id)],
@@ -189,10 +203,6 @@ def download_thread(task_id, url, quality, download_type):
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
-            'quiet': True,
-            'no_warnings': True,
-            'noprogress': True,
-            'logger': YTDLLogger(),
         }
     else:
         # mp4 video download
@@ -203,14 +213,11 @@ def download_thread(task_id, url, quality, download_type):
             fmt_spec = f'bestvideo[height<={height}]+bestaudio/best'
         
         ydl_opts = {
+            **base_opts,
             'format': fmt_spec,
             'outtmpl': os.path.join(task_dir, '%(title)s.%(ext)s'),
             'merge_output_format': 'mp4',
             'progress_hooks': [progress_hook(task_id)],
-            'quiet': True,
-            'no_warnings': True,
-            'noprogress': True,
-            'logger': YTDLLogger(),
         }
 
     try:
@@ -326,11 +333,17 @@ def get_formats():
     if not url:
         return jsonify({'error': 'URL cannot be empty'}), 400
         
+    # YouTube anti-bot bypass options (Android client + headers)
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'skip_download': True,
         'logger': YTDLLogger(),
+        'user_agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        },
     }
 
     # Optional cookies support (pass Netscape cookie file contents via JSON 'cookies'
