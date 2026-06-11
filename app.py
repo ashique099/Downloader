@@ -607,6 +607,7 @@ def download_thread(task_id, url, quality, download_type):
             except Exception:
                 pass
         tb_str = traceback.format_exc()
+        with task_lock:
             if download_tasks.get(task_id) and download_tasks[task_id]['status'] != 'completed':
                 download_tasks[task_id]['status'] = 'failed'
                 download_tasks[task_id]['error'] = str(e)
